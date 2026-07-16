@@ -124,6 +124,26 @@
   .empty { text-align: center; color: var(--muted); padding: 20px 0; font-size: 14px; }
   .footer-btns { display: flex; gap: 8px; }
   .footer-btns .btn { flex: 1; }
+
+  .person-block { border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-bottom: 10px; }
+  .person-block .head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  .person-block .head .who { font-weight: 600; }
+  .person-block .head .sum { font-weight: 700; font-size: 15px; }
+  .item-row { display: flex; gap: 6px; margin-bottom: 6px; }
+  .item-row .iname { flex: 1; }
+  .item-row .iamt { width: 92px; }
+  .item-row input { padding: 8px 10px; }
+  .add-item { border: none; background: transparent; color: var(--accent); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; padding: 2px 0; }
+  .shared-block { border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-bottom: 10px; }
+  .shared-block .item-row { margin-bottom: 8px; }
+  .sharer-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--muted); font-size: 13px; cursor: pointer; user-select: none;
+  }
+  .chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .chip input { display: none; }
+  .split-note { font-size: 12px; color: var(--muted); margin-top: 6px; }
 </style>
 </head>
 <body>
@@ -159,9 +179,17 @@
     </div>
 
     <div id="customBox" style="margin-top:12px">
-      <div id="shares"></div>
-      <p class="hint">Enter each person's own share above. Add people to see them here.</p>
+      <div id="perPerson"></div>
+      <p class="hint">Add each item a person ordered (food, drink…). They add up to that person's share.</p>
     </div>
+  </div>
+
+  <!-- Food to share -->
+  <div class="card" id="sharedCard">
+    <h2>🍽 Food to share</h2>
+    <div id="sharedItems"></div>
+    <button class="btn btn-soft" style="margin-top:10px" onclick="addShared()">+ Add shared dish</button>
+    <p class="hint">Each dish's price is split evenly among the people you tick.</p>
   </div>
 
   <!-- Extras -->
@@ -214,23 +242,36 @@
 
 <script>
 const $ = id => document.getElementById(id);
-let state = load() || { people: [], mode: 'custom', payer: '' };
+let state = load() || { people: [], mode: 'custom', payer: '', shared: [] };
+migrate();
 
 function save() { localStorage.setItem('billSplitter', JSON.stringify(state)); }
 function load() { try { return JSON.parse(localStorage.getItem('billSplitter')); } catch(e) { return null; } }
 function uid() { return Math.random().toString(36).slice(2, 9); }
+
+// bring older saved data up to the current shape (people had a single `share`)
+function migrate() {
+  if (!Array.isArray(state.shared)) state.shared = [];
+  state.people.forEach(p => {
+    if (!Array.isArray(p.items)) {
+      p.items = (p.share > 0) ? [{ id: uid(), name: 'Item', amount: p.share }] : [];
+    }
+    delete p.share;
+  });
+}
 const money = n => (isNaN(n) ? 0 : n).toLocaleString('ms-MY', { style:'currency', currency:'MYR' });
 
 function addPerson(name) {
   name = (name ?? $('newName').value).trim();
   if (!name) return;
-  state.people.push({ id: uid(), name, share: 0 });
+  state.people.push({ id: uid(), name, items: [] });
   $('newName').value = '';
   render();
 }
 
 function removePerson(id) {
   state.people = state.people.filter(p => p.id !== id);
+  state.shared.forEach(s => { s.by = s.by.filter(pid => pid !== id); });
   if (state.payer === id) state.payer = '';
   render();
 }
@@ -250,15 +291,49 @@ function renderPeople() {
     </div>`).join('');
 }
 
-function renderShares() {
-  const box = $('shares');
+function renderCustom() {
+  const box = $('perPerson');
   if (!state.people.length) { box.innerHTML = '<div class="empty">Add people first.</div>'; return; }
-  box.innerHTML = state.people.map(p => `
-    <div class="person-row">
-      <span class="name">${escapeHtml(p.name)}</span>
-      <input class="amt" type="number" inputmode="decimal" placeholder="0.00"
-             value="${p.share || ''}" oninput="setShare('${p.id}', this.value)">
-    </div>`).join('');
+  box.innerHTML = state.people.map(p => {
+    const items = p.items.map(it => `
+      <div class="item-row">
+        <input class="iname" placeholder="Item (e.g. Nasi Lemak)" value="${escapeHtml(it.name)}" oninput="renameItem('${p.id}','${it.id}',this.value)">
+        <input class="iamt" type="number" inputmode="decimal" placeholder="0.00" value="${it.amount || ''}" oninput="setItemAmt('${p.id}','${it.id}',this.value)">
+        <button class="icon-btn" title="Remove item" onclick="removeItem('${p.id}','${it.id}')">×</button>
+      </div>`).join('');
+    return `<div class="person-block">
+      <div class="head"><span class="who">${escapeHtml(p.name)}</span><span class="sum" id="sum-${p.id}"></span></div>
+      ${items}
+      <button class="add-item" onclick="addItem('${p.id}')">+ add item</button>
+    </div>`;
+  }).join('');
+}
+
+function renderShared() {
+  const box = $('sharedItems');
+  if (!state.shared.length) { box.innerHTML = '<div class="empty">No shared dishes yet.</div>'; return; }
+  box.innerHTML = state.shared.map(s => {
+    const chips = state.people.map(p => {
+      const on = s.by.includes(p.id);
+      return `<label class="chip ${on?'on':''}"><input type="checkbox" ${on?'checked':''} onchange="toggleSharer('${s.id}','${p.id}')">${escapeHtml(p.name)}</label>`;
+    }).join('');
+    return `<div class="shared-block">
+      <div class="item-row">
+        <input class="iname" placeholder="Dish (e.g. Satay)" value="${escapeHtml(s.name)}" oninput="renameShared('${s.id}',this.value)">
+        <input class="iamt" type="number" inputmode="decimal" placeholder="0.00" value="${s.amount || ''}" oninput="setSharedAmt('${s.id}',this.value)">
+        <button class="icon-btn" title="Remove dish" onclick="removeShared('${s.id}')">×</button>
+      </div>
+      <div class="sharer-chips">${chips || '<span class="split-note">Add people first to assign this.</span>'}</div>
+      <div class="split-note" id="note-${s.id}">${sharedNoteHtml(s)}</div>
+    </div>`;
+  }).join('');
+}
+
+function sharedNoteHtml(s) {
+  const nBy = s.by.length;
+  if (!nBy) return `<span style="color:var(--danger)">Tick who's sharing this dish</span>`;
+  const per = (s.amount || 0) / nBy;
+  return `${money(s.amount || 0)} ÷ ${nBy} = <strong>${money(per)}</strong> each`;
 }
 
 function renderPayer() {
@@ -267,12 +342,37 @@ function renderPayer() {
     state.people.map(p => `<option value="${p.id}" ${state.payer===p.id?'selected':''}>${escapeHtml(p.name)}</option>`).join('');
 }
 
-function rename(id, v) { const p = state.people.find(x=>x.id===id); if (p) { p.name = v; renderShares(); renderPayer(); save(); } }
-function setShare(id, v) { const p = state.people.find(x=>x.id===id); if (p) { p.share = parseFloat(v) || 0; calc(); save(); } }
+function rename(id, v) { const p = state.people.find(x=>x.id===id); if (p) { p.name = v; renderCustom(); renderShared(); renderPayer(); calc(); save(); } }
+
+// per-person items
+function getItem(pid, iid) { const p = state.people.find(x=>x.id===pid); return p ? p.items.find(i=>i.id===iid) : null; }
+function addItem(pid) { const p = state.people.find(x=>x.id===pid); if (p) { p.items.push({ id: uid(), name: '', amount: 0 }); render(); } }
+function renameItem(pid, iid, v) { const it = getItem(pid, iid); if (it) { it.name = v; save(); } }
+function setItemAmt(pid, iid, v) { const it = getItem(pid, iid); if (it) { it.amount = parseFloat(v) || 0; calc(); save(); } }
+function removeItem(pid, iid) { const p = state.people.find(x=>x.id===pid); if (p) { p.items = p.items.filter(i => i.id !== iid); render(); } }
+
+// shared dishes
+function addShared() { state.shared.push({ id: uid(), name: '', amount: 0, by: state.people.map(p => p.id) }); render(); }
+function renameShared(id, v) { const s = state.shared.find(x=>x.id===id); if (s) { s.name = v; save(); } }
+function setSharedAmt(id, v) { const s = state.shared.find(x=>x.id===id); if (s) { s.amount = parseFloat(v) || 0; const el = $('note-'+id); if (el) el.innerHTML = sharedNoteHtml(s); calc(); save(); } }
+function removeShared(id) { state.shared = state.shared.filter(s => s.id !== id); render(); }
+function toggleSharer(sid, pid) {
+  const s = state.shared.find(x=>x.id===sid); if (!s) return;
+  s.by = s.by.includes(pid) ? s.by.filter(x => x !== pid) : [...s.by, pid];
+  renderShared(); calc(); save();
+}
+
+function personBase(p) {
+  let total = p.items.reduce((s, it) => s + (it.amount || 0), 0);
+  state.shared.forEach(sh => {
+    if (sh.by.length && sh.by.includes(p.id)) total += (sh.amount || 0) / sh.by.length;
+  });
+  return total;
+}
 
 function baseFor(p, subtotal) {
   if (state.mode === 'even') return state.people.length ? subtotal / state.people.length : 0;
-  return p.share || 0;
+  return personBase(p);
 }
 
 function calc() {
@@ -283,7 +383,10 @@ function calc() {
   // subtotal (before any charges)
   let subtotal;
   if (mode === 'even') subtotal = parseFloat($('evenTotal').value) || 0;
-  else subtotal = state.people.reduce((s,p) => s + (p.share||0), 0);
+  else subtotal = state.people.reduce((s,p) => s + personBase(p), 0);
+
+  // live per-person subtotal shown in the custom editor
+  state.people.forEach(p => { const el = $('sum-'+p.id); if (el) el.textContent = money(personBase(p)); });
 
   // service charge — split EVENLY between everyone
   const scVal = parseFloat($('scVal').value) || 0;
@@ -346,17 +449,19 @@ function calc() {
 
 function render() {
   renderPeople();
-  renderShares();
+  renderCustom();
+  renderShared();
   renderPayer();
   document.querySelectorAll('#modeSeg button').forEach(b => b.classList.toggle('active', b.dataset.mode === state.mode));
   $('evenBox').style.display = state.mode === 'even' ? 'block' : 'none';
   $('customBox').style.display = state.mode === 'custom' ? 'block' : 'none';
+  $('sharedCard').style.display = state.mode === 'custom' ? 'block' : 'none';
   calc();
 }
 
 function resetAll() {
   if (!confirm('Clear everyone and start over?')) return;
-  state = { people: [], mode: state.mode, payer: '' };
+  state = { people: [], mode: state.mode, payer: '', shared: [] };
   $('evenTotal').value = '';
   $('scVal').value = '10';
   $('taxVal').value = '6';
@@ -368,7 +473,7 @@ function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;'
 $('newName').addEventListener('keydown', e => { if (e.key === 'Enter') addPerson(); });
 
 // seed a couple of people on first run for a friendlier start
-if (!state.people.length) { state.people = [{id:uid(),name:'Me',share:0},{id:uid(),name:'Friend',share:0}]; }
+if (!state.people.length) { state.people = [{id:uid(),name:'Me',items:[]},{id:uid(),name:'Friend',items:[]}]; }
 render();
 </script>
 </body>
