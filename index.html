@@ -153,6 +153,14 @@
   .qr-show img { max-width: 260px; width: 72%; border-radius: 12px; border: 1px solid var(--border); background: #fff; padding: 10px; }
   .qr-show .rm { display: inline-block; margin-top: 8px; font-size: 12px; color: var(--muted); cursor: pointer; background: none; border: none; }
   .qr-show .rm:hover { color: var(--danger); }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px);
+    background: var(--text); color: var(--card); padding: 10px 18px; border-radius: 10px;
+    font-size: 14px; font-weight: 600; opacity: 0; pointer-events: none; transition: .25s; z-index: 50;
+    box-shadow: 0 6px 20px rgba(0,0,0,.25); max-width: 90vw; text-align: center;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 </style>
 </head>
 <body>
@@ -246,9 +254,14 @@
   </div>
 
   <div class="footer-btns">
+    <button class="btn btn-primary" onclick="shareResult()">📤 Share / save</button>
+    <button class="btn btn-soft" onclick="copySummary()">📋 Copy text</button>
+  </div>
+  <div class="footer-btns" style="margin-top:8px">
     <button class="btn btn-soft" onclick="resetAll()">Reset</button>
   </div>
 </div>
+<div id="toast" class="toast"></div>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -350,7 +363,12 @@ function sharedNoteHtml(s) {
   return `${money(s.amount || 0)} ÷ ${nBy} = <strong>${money(per)}</strong> each`;
 }
 
-// payment QR — uploaded per person, stored (downscaled) only in this browser
+// payment QR — either baked into the repo (qr/<name>.png) or uploaded per person
+function slug(name) { return String(name).trim().toLowerCase().replace(/[^a-z0-9]/g, ''); }
+function bakedQRFor(p) { return p && slug(p.name) ? 'qr/' + slug(p.name) + '.png' : null; }
+// resolves to the best QR source for a person: uploaded first, then baked-in file
+function qrSrcFor(p) { return p ? (p.qr || bakedQRFor(p)) : null; }
+
 function setQR(pid, input) {
   const file = input.files && input.files[0];
   if (!file) return;
@@ -389,15 +407,26 @@ function updatePayerQR() {
   const box = $('payerQR');
   const payer = state.people.find(p => p.id === state.payer);
   if (!payer) { box.innerHTML = ''; return; }
-  if (payer.qr) {
-    box.innerHTML = `<div class="qr-show">
-      <p>📱 Scan to pay <strong>${escapeHtml(payer.name)}</strong></p>
-      <img src="${payer.qr}" alt="Payment QR for ${escapeHtml(payer.name)}">
-      <div><button class="rm" onclick="removeQR('${payer.id}')">Remove QR</button></div>
-    </div>`;
-  } else {
+  const src = qrSrcFor(payer);
+  if (!src) {
     box.innerHTML = `<p class="hint" style="text-align:center;margin-top:12px">No payment QR for ${escapeHtml(payer.name)} yet — add one with the “+ QR” button in the People section.</p>`;
+    return;
   }
+  // onerror covers a baked file that isn't present in the repo
+  const removeBtn = payer.qr ? `<div><button class="rm" onclick="removeQR('${payer.id}')">Remove QR</button></div>` : '';
+  box.innerHTML = `<div class="qr-show">
+    <p>📱 Scan to pay <strong>${escapeHtml(payer.name)}</strong></p>
+    <img src="${src}" alt="Payment QR for ${escapeHtml(payer.name)}" onerror="qrMissing()">
+    ${removeBtn}
+  </div>`;
+}
+
+function qrMissing() {
+  const payer = state.people.find(p => p.id === state.payer);
+  const box = $('payerQR');
+  box.innerHTML = payer
+    ? `<p class="hint" style="text-align:center;margin-top:12px">No payment QR for ${escapeHtml(payer.name)} yet — add one with the “+ QR” button in the People section.</p>`
+    : '';
 }
 
 function renderPayer() {
@@ -439,76 +468,74 @@ function baseFor(p, subtotal) {
   return personBase(p);
 }
 
-function calc() {
-  state.payer = $('payer').value;
-  updatePayerQR();
+// pure calculation — returns all the numbers used by both the UI and the summary
+function computeSplit() {
   const mode = state.mode;
   const n = state.people.length;
-
-  // subtotal (before any charges)
   let subtotal;
   if (mode === 'even') subtotal = parseFloat($('evenTotal').value) || 0;
   else subtotal = state.people.reduce((s,p) => s + personBase(p), 0);
 
-  // live per-person subtotal shown in the custom editor
-  state.people.forEach(p => { const el = $('sum-'+p.id); if (el) el.textContent = money(personBase(p)); });
-
-  // service charge — split EVENLY between everyone
   const scVal = parseFloat($('scVal').value) || 0;
   const serviceCharge = $('scType').value === 'pct' ? subtotal * scVal/100 : scVal;
   const scPerPerson = n ? serviceCharge / n : 0;
 
-  // service tax — charged on the items total only (incl. shared food),
-  // NOT on the service charge
   const taxVal = parseFloat($('taxVal').value) || 0;
   const taxRate = $('taxType').value === 'pct' ? taxVal/100 : 0;
   const taxFlat = $('taxType').value === 'abs' ? taxVal : 0;
-  const taxableTotal = subtotal;
+  const taxableTotal = subtotal; // tax on items only, not service charge
   const serviceTax = taxRate > 0 ? taxableTotal * taxRate : taxFlat;
-
   const grand = subtotal + serviceCharge + serviceTax;
 
+  const rows = state.people.map(p => {
+    const base = baseFor(p, subtotal);
+    const tax = taxRate > 0 ? base * taxRate : (taxableTotal > 0 ? taxFlat * base / taxableTotal : 0);
+    const owe = base + scPerPerson + tax;
+    return { id: p.id, name: p.name, base, sc: scPerPerson, tax, owe, isPayer: state.payer === p.id };
+  });
+  return { rows, subtotal, serviceCharge, scPerPerson, serviceTax, grand, mode, n };
+}
+
+function calc() {
+  state.payer = $('payer').value;
+  updatePayerQR();
+  const d = computeSplit();
+
+  // live per-person subtotal shown in the custom editor
+  state.people.forEach(p => { const el = $('sum-'+p.id); if (el) el.textContent = money(personBase(p)); });
+
   const res = $('results');
-  if (!n || subtotal <= 0) {
+  if (!d.n || d.subtotal <= 0) {
     res.innerHTML = '<div class="empty">Add people and amounts to see the split.</div>';
     $('totals').innerHTML = '';
     save();
     return;
   }
 
-  res.innerHTML = state.people.map(p => {
-    const base = baseFor(p, subtotal);
-    const taxable = base; // service tax is on items only, not the service charge
-    // proportional flat tax fallback, else percentage tax on this person's items
-    const personTax = taxRate > 0 ? taxable * taxRate
-                                  : (taxableTotal > 0 ? taxFlat * taxable / taxableTotal : 0);
-    const owesTotal = base + scPerPerson + personTax;
-    const isPayer = state.payer === p.id;
-
-    let sub = `${money(base)} share`;
-    if (serviceCharge > 0) sub += ` + ${money(scPerPerson)} svc`;
-    if (serviceTax > 0) sub += ` + ${money(personTax)} tax`;
+  res.innerHTML = d.rows.map(r => {
+    let sub = `${money(r.base)} share`;
+    if (d.serviceCharge > 0) sub += ` + ${money(r.sc)} svc`;
+    if (d.serviceTax > 0) sub += ` + ${money(r.tax)} tax`;
 
     let valHtml;
-    if (isPayer) {
-      const paidBack = grand - owesTotal;
-      valHtml = `<span class="val paid">gets ${money(paidBack)}</span>`;
+    if (r.isPayer) {
+      valHtml = `<span class="val paid">gets ${money(d.grand - r.owe)}</span>`;
       sub += ' · paid the bill';
     } else {
-      valHtml = `<span class="val owes">${money(owesTotal)}</span>`;
+      valHtml = `<span class="val owes">${money(r.owe)}</span>`;
     }
     return `<div class="result-row">
-      <div><div class="who">${escapeHtml(p.name)}</div><div class="sub">${sub}</div></div>
+      <div><div class="who">${escapeHtml(r.name)}</div><div class="sub">${sub}</div></div>
       ${valHtml}
     </div>`;
   }).join('');
 
   const payerName = state.payer ? (state.people.find(p=>p.id===state.payer)||{}).name : null;
   $('totals').innerHTML = `
-    <div class="line"><span>Subtotal</span><span>${money(subtotal)}</span></div>
-    <div class="line"><span>Service charge${serviceCharge>0?' (split evenly)':''}</span><span>${money(serviceCharge)}</span></div>
-    <div class="line"><span>Service tax</span><span>${money(serviceTax)}</span></div>
-    <div class="line grand"><span>Total${payerName ? ' — '+escapeHtml(payerName)+' paid' : ''}</span><span>${money(grand)}</span></div>`;
+    <div class="line"><span>Subtotal</span><span>${money(d.subtotal)}</span></div>
+    <div class="line"><span>Service charge${d.serviceCharge>0?' (split evenly)':''}</span><span>${money(d.serviceCharge)}</span></div>
+    <div class="line"><span>Service tax</span><span>${money(d.serviceTax)}</span></div>
+    <div class="line grand"><span>Total${payerName ? ' — '+escapeHtml(payerName)+' paid' : ''}</span><span>${money(d.grand)}</span></div>`;
   save();
 }
 
@@ -531,6 +558,175 @@ function resetAll() {
   $('scVal').value = '10';
   $('taxVal').value = '6';
   render();
+}
+
+// ---------- Share / summary ----------
+function personById(id) { return state.people.find(p => p.id === id); }
+
+// short text of what a person is paying for (items + shared portions)
+function personItemsText(p) {
+  if (state.mode === 'even') return 'even share';
+  const parts = [];
+  p.items.forEach(it => { const a = it.amount || 0; if (a > 0) parts.push(`${it.name || 'Item'} ${a.toFixed(2)}`); });
+  state.shared.forEach(sh => {
+    if (sh.by.length && sh.by.includes(p.id)) parts.push(`${sh.name || 'Shared'} (÷${sh.by.length}) ${((sh.amount||0)/sh.by.length).toFixed(2)}`);
+  });
+  return parts.join(', ');
+}
+
+function todayStr() { return new Date().toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' }); }
+
+function buildTextSummary(d) {
+  const payer = personById(state.payer);
+  const L = [];
+  L.push('🍽 Office Food — Bill Split');
+  L.push(todayStr());
+  L.push('');
+  d.rows.forEach(r => {
+    if (r.isPayer) return;
+    L.push(`• ${r.name}: ${money(r.owe)}`);
+    const it = personItemsText(personById(r.id));
+    if (it) L.push(`   ${it}`);
+  });
+  const owed = d.rows.filter(r => !r.isPayer).reduce((s,r) => s + r.owe, 0);
+  L.push('');
+  if (payer) {
+    L.push(`💰 ${payer.name} paid ${money(d.grand)} — collect ${money(owed)}`);
+    if (qrSrcFor(payer)) L.push(`📱 Scan ${payer.name}'s QR to pay`);
+  } else {
+    L.push(`Total: ${money(d.grand)}`);
+  }
+  L.push('');
+  L.push(`Subtotal ${money(d.subtotal)} · Service ${money(d.serviceCharge)} · Tax ${money(d.serviceTax)}`);
+  return L.join('\n');
+}
+
+function wrapText(ctx, text, maxWidth) {
+  const words = String(text).split(' ');
+  const lines = []; let line = '';
+  words.forEach(w => {
+    const test = line ? line + ' ' + w : w;
+    if (ctx.measureText(test).width > maxWidth && line) { lines.push(line); line = w; }
+    else line = test;
+  });
+  if (line) lines.push(line);
+  return lines;
+}
+
+// draws the summary (with the payer's QR) onto a canvas and resolves a PNG Blob
+function buildSummaryImage(d) {
+  return new Promise(resolve => {
+    const payer = personById(state.payer);
+    const src = qrSrcFor(payer);
+    if (src) { const img = new Image(); img.onload = () => draw(img); img.onerror = () => draw(null); img.src = src; }
+    else draw(null);
+
+    function draw(qrImg) {
+      const FN = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      const W = 620, padX = 36, contentW = W - padX * 2;
+      const mc = document.createElement('canvas').getContext('2d');
+
+      const rowsData = d.rows.filter(r => !r.isPayer).map(r => {
+        mc.font = '13px ' + FN;
+        const it = personItemsText(personById(r.id));
+        return { r, itLines: it ? wrapText(mc, it, contentW - 100) : [] };
+      });
+
+      let qrDraw = null;
+      if (qrImg) { const box = 220, s = Math.min(box/qrImg.width, box/qrImg.height); qrDraw = { w: qrImg.width*s, h: qrImg.height*s }; }
+
+      let H = 28 + 30 + 22 + 12;
+      rowsData.forEach(rd => { H += 22 + rd.itLines.length * 17 + 6; });
+      H += 12 + 24 + 20;
+      if (qrDraw) H += 22 + qrDraw.h + 8;
+      H += 28;
+
+      const scale = 2;
+      const canvas = document.createElement('canvas');
+      canvas.width = W * scale; canvas.height = H * scale;
+      const ctx = canvas.getContext('2d');
+      ctx.scale(scale, scale);
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
+      ctx.textBaseline = 'top';
+
+      let y = 28;
+      ctx.fillStyle = '#1a1d24'; ctx.font = '700 22px ' + FN; ctx.textAlign = 'left';
+      ctx.fillText('Office Food — Bill Split', padX, y); y += 30;
+      ctx.fillStyle = '#6b7280'; ctx.font = '13px ' + FN;
+      ctx.fillText(todayStr(), padX, y); y += 22;
+      line(y); y += 12;
+
+      rowsData.forEach(({ r, itLines }) => {
+        ctx.fillStyle = '#1a1d24'; ctx.font = '600 16px ' + FN; ctx.textAlign = 'left';
+        ctx.fillText(r.name, padX, y);
+        ctx.font = '700 16px ' + FN; ctx.textAlign = 'right'; ctx.fillStyle = '#c0392b';
+        ctx.fillText(money(r.owe), W - padX, y);
+        ctx.textAlign = 'left'; y += 22;
+        ctx.fillStyle = '#6b7280'; ctx.font = '13px ' + FN;
+        itLines.forEach(l => { ctx.fillText(l, padX, y); y += 17; });
+        y += 6;
+      });
+
+      line(y); y += 12;
+      const owed = d.rows.filter(x => !x.isPayer).reduce((s,x) => s + x.owe, 0);
+      ctx.textAlign = 'left'; ctx.font = '700 16px ' + FN;
+      if (payer) { ctx.fillStyle = '#127c3a'; ctx.fillText(`${payer.name} paid ${money(d.grand)} · collect ${money(owed)}`, padX, y); }
+      else { ctx.fillStyle = '#1a1d24'; ctx.fillText(`Total ${money(d.grand)}`, padX, y); }
+      y += 24;
+      ctx.fillStyle = '#6b7280'; ctx.font = '13px ' + FN;
+      ctx.fillText(`Subtotal ${money(d.subtotal)}   ·   Service ${money(d.serviceCharge)}   ·   Tax ${money(d.serviceTax)}`, padX, y); y += 20;
+
+      if (qrDraw) {
+        ctx.fillStyle = '#1a1d24'; ctx.font = '600 14px ' + FN; ctx.textAlign = 'center';
+        ctx.fillText(`Scan to pay ${payer ? payer.name : ''}`, W/2, y); y += 22;
+        const qx = (W - qrDraw.w) / 2;
+        ctx.fillStyle = '#ffffff'; ctx.fillRect(qx - 8, y - 8, qrDraw.w + 16, qrDraw.h + 16);
+        ctx.drawImage(qrImg, qx, y, qrDraw.w, qrDraw.h);
+        y += qrDraw.h + 8;
+      }
+
+      canvas.toBlob(b => resolve(b), 'image/png');
+
+      function line(yy) { ctx.strokeStyle = '#e3e6eb'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(padX, yy + .5); ctx.lineTo(W - padX, yy + .5); ctx.stroke(); }
+    }
+  });
+}
+
+async function shareResult() {
+  const d = computeSplit();
+  if (!d.n || d.subtotal <= 0) { flash('Add people and amounts first'); return; }
+  const text = buildTextSummary(d);
+  let blob = null;
+  try { blob = await buildSummaryImage(d); } catch (e) {}
+  const file = blob ? new File([blob], 'office-food-split.png', { type: 'image/png' }) : null;
+
+  if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], text, title: 'Office Food — Bill Split' }); return; }
+    catch (e) { if (e.name === 'AbortError') return; }
+  }
+  if (blob) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = 'office-food-split.png';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+  try { await navigator.clipboard.writeText(text); flash('Image saved · text copied'); }
+  catch (e) { flash(blob ? 'Image saved' : 'Nothing to share'); }
+}
+
+async function copySummary() {
+  const d = computeSplit();
+  if (!d.n || d.subtotal <= 0) { flash('Add people and amounts first'); return; }
+  const text = buildTextSummary(d);
+  try { await navigator.clipboard.writeText(text); flash('Summary copied!'); }
+  catch (e) { prompt('Copy this summary:', text); }
+}
+
+let toastTimer;
+function flash(msg) {
+  const t = $('toast'); if (!t) return;
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
 }
 
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
