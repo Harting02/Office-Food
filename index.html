@@ -217,7 +217,7 @@
         </div>
       </div>
     </div>
-    <p class="hint">Service charge is split <strong>evenly</strong> between everyone. Service tax is charged on each person's share <em>plus</em> their share of the service charge.</p>
+    <p class="hint">Service charge is split <strong>evenly</strong> between everyone. Service tax is charged on the items total only (including shared food), <em>not</em> on the service charge.</p>
   </div>
 
   <!-- Who paid -->
@@ -393,12 +393,12 @@ function calc() {
   const serviceCharge = $('scType').value === 'pct' ? subtotal * scVal/100 : scVal;
   const scPerPerson = n ? serviceCharge / n : 0;
 
-  // service tax — charged on (share + even service charge share), so it never
-  // stacks on itself and the per-person totals sum exactly to the grand total
+  // service tax — charged on the items total only (incl. shared food),
+  // NOT on the service charge
   const taxVal = parseFloat($('taxVal').value) || 0;
   const taxRate = $('taxType').value === 'pct' ? taxVal/100 : 0;
   const taxFlat = $('taxType').value === 'abs' ? taxVal : 0;
-  const taxableTotal = subtotal + serviceCharge;
+  const taxableTotal = subtotal;
   const serviceTax = taxRate > 0 ? taxableTotal * taxRate : taxFlat;
 
   const grand = subtotal + serviceCharge + serviceTax;
@@ -413,8 +413,8 @@ function calc() {
 
   res.innerHTML = state.people.map(p => {
     const base = baseFor(p, subtotal);
-    const taxable = base + scPerPerson;
-    // proportional flat tax fallback, else percentage tax on this person's taxable amount
+    const taxable = base; // service tax is on items only, not the service charge
+    // proportional flat tax fallback, else percentage tax on this person's items
     const personTax = taxRate > 0 ? taxable * taxRate
                                   : (taxableTotal > 0 ? taxFlat * taxable / taxableTotal : 0);
     const owesTotal = base + scPerPerson + personTax;
