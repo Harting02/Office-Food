@@ -2,6 +2,10 @@
 
 A tiny, single-file web app to work out who owes what after someone pays for a shared meal.
 
+**🔗 [Preview the live site »](https://harting02.github.io/Office-Food/)**
+
+> Requires GitHub Pages to be enabled (Settings → Pages → Deploy from branch → `main` / root).
+
 ## Features
 
 - **Custom per person** — each person enters their own share (what they actually ordered).
