@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bill Splitter</title>
+<style>
+  :root {
+    --bg: #f4f5f7;
+    --card: #ffffff;
+    --text: #1a1d24;
+    --muted: #6b7280;
+    --border: #e3e6eb;
+    --accent: #4f46e5;
+    --accent-soft: #eef2ff;
+    --good: #16a34a;
+    --danger: #dc2626;
+    --shadow: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115;
+      --card: #191c22;
+      --text: #eef0f4;
+      --muted: #9aa1ad;
+      --border: #2a2e37;
+      --accent: #818cf8;
+      --accent-soft: #23263a;
+      --good: #4ade80;
+      --danger: #f87171;
+      --shadow: 0 1px 3px rgba(0,0,0,.3);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 560px; margin: 0 auto; padding: 20px 16px 80px; }
+  header { text-align: center; margin-bottom: 20px; }
+  header h1 { font-size: 24px; margin: 0 0 4px; }
+  header p { color: var(--muted); margin: 0; font-size: 14px; }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 16px;
+    margin-bottom: 16px;
+    box-shadow: var(--shadow);
+  }
+  .card h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    color: var(--muted);
+    margin: 0 0 12px;
+  }
+
+  label { font-size: 13px; color: var(--muted); display: block; margin-bottom: 4px; }
+  input, select {
+    font: inherit;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg);
+    color: var(--text);
+    width: 100%;
+  }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+  input[type=number] { -moz-appearance: textfield; }
+
+  .seg { display: flex; gap: 6px; background: var(--bg); padding: 4px; border-radius: 10px; border: 1px solid var(--border); }
+  .seg button {
+    flex: 1; padding: 8px; border: none; background: transparent; color: var(--muted);
+    border-radius: 7px; font: inherit; font-size: 14px; cursor: pointer;
+  }
+  .seg button.active { background: var(--card); color: var(--text); box-shadow: var(--shadow); font-weight: 600; }
+
+  .person-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .person-row .name { flex: 1; }
+  .person-row .amt { width: 110px; }
+  .icon-btn {
+    border: none; background: transparent; color: var(--muted); cursor: pointer;
+    font-size: 20px; padding: 4px 8px; border-radius: 8px; line-height: 1;
+  }
+  .icon-btn:hover { background: var(--bg); color: var(--danger); }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 10px 14px; border: none; border-radius: 10px; font: inherit; font-weight: 600;
+    cursor: pointer; width: 100%;
+  }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-soft { background: var(--accent-soft); color: var(--accent); }
+  .btn:active { transform: translateY(1px); }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .field { margin-bottom: 12px; }
+  .field:last-child { margin-bottom: 0; }
+
+  .result-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 12px 0; border-bottom: 1px solid var(--border);
+  }
+  .result-row:last-child { border-bottom: none; }
+  .result-row .who { font-weight: 600; }
+  .result-row .sub { font-size: 12px; color: var(--muted); }
+  .result-row .val { font-weight: 700; font-size: 18px; }
+  .val.owes { color: var(--danger); }
+  .val.paid { color: var(--good); }
+
+  .totals { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; font-size: 14px; }
+  .totals .line { display: flex; justify-content: space-between; color: var(--muted); }
+  .totals .line.grand { color: var(--text); font-weight: 700; font-size: 17px; padding-top: 8px; border-top: 1px solid var(--border); margin-top: 4px; }
+
+  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .row-inline { display: flex; gap: 8px; align-items: flex-end; }
+  .row-inline > div { flex: 1; }
+  .empty { text-align: center; color: var(--muted); padding: 20px 0; font-size: 14px; }
+  .footer-btns { display: flex; gap: 8px; }
+  .footer-btns .btn { flex: 1; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>💸 Bill Splitter</h1>
+    <p>Work out who owes what after someone pays</p>
+  </header>
+
+  <!-- People -->
+  <div class="card">
+    <h2>People</h2>
+    <div id="people"></div>
+    <div class="row-inline" style="margin-top:10px">
+      <div>
+        <input id="newName" placeholder="Add a person…" autocomplete="off">
+      </div>
+      <button class="btn btn-soft" style="width:auto;padding:10px 16px" onclick="addPerson()">Add</button>
+    </div>
+  </div>
+
+  <!-- Split mode -->
+  <div class="card">
+    <h2>How to split</h2>
+    <div class="seg" id="modeSeg">
+      <button data-mode="custom" class="active" onclick="setMode('custom')">Custom per person</button>
+      <button data-mode="even" onclick="setMode('even')">Even split</button>
+    </div>
+
+    <div id="evenBox" style="display:none;margin-top:12px">
+      <label>Total bill (before service charge &amp; tax)</label>
+      <input id="evenTotal" type="number" inputmode="decimal" placeholder="0.00" oninput="calc()">
+    </div>
+
+    <div id="customBox" style="margin-top:12px">
+      <div id="shares"></div>
+      <p class="hint">Enter each person's own share above. Add people to see them here.</p>
+    </div>
+  </div>
+
+  <!-- Extras -->
+  <div class="card">
+    <h2>Charges</h2>
+    <div class="grid2">
+      <div>
+        <label>Service charge</label>
+        <div class="row-inline">
+          <div><input id="scVal" type="number" inputmode="decimal" placeholder="0" value="10" oninput="calc()"></div>
+          <select id="scType" style="width:70px" onchange="calc()">
+            <option value="pct">%</option>
+            <option value="abs">RM</option>
+          </select>
+        </div>
+      </div>
+      <div>
+        <label>Service tax</label>
+        <div class="row-inline">
+          <div><input id="taxVal" type="number" inputmode="decimal" placeholder="0" value="6" oninput="calc()"></div>
+          <select id="taxType" style="width:70px" onchange="calc()">
+            <option value="pct">%</option>
+            <option value="abs">RM</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <p class="hint">Service charge is split <strong>evenly</strong> between everyone. Service tax is charged on each person's share <em>plus</em> their share of the service charge.</p>
+  </div>
+
+  <!-- Who paid -->
+  <div class="card">
+    <h2>Who paid?</h2>
+    <select id="payer" onchange="calc()">
+      <option value="">— nobody yet —</option>
+    </select>
+  </div>
+
+  <!-- Results -->
+  <div class="card">
+    <h2>Result</h2>
+    <div id="results"><div class="empty">Add people and amounts to see the split.</div></div>
+    <div class="totals" id="totals"></div>
+  </div>
+
+  <div class="footer-btns">
+    <button class="btn btn-soft" onclick="resetAll()">Reset</button>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let state = load() || { people: [], mode: 'custom', payer: '' };
+
+function save() { localStorage.setItem('billSplitter', JSON.stringify(state)); }
+function load() { try { return JSON.parse(localStorage.getItem('billSplitter')); } catch(e) { return null; } }
+function uid() { return Math.random().toString(36).slice(2, 9); }
+const money = n => (isNaN(n) ? 0 : n).toLocaleString('ms-MY', { style:'currency', currency:'MYR' });
+
+function addPerson(name) {
+  name = (name ?? $('newName').value).trim();
+  if (!name) return;
+  state.people.push({ id: uid(), name, share: 0 });
+  $('newName').value = '';
+  render();
+}
+
+function removePerson(id) {
+  state.people = state.people.filter(p => p.id !== id);
+  if (state.payer === id) state.payer = '';
+  render();
+}
+
+function setMode(m) {
+  state.mode = m;
+  render();
+}
+
+function renderPeople() {
+  const box = $('people');
+  if (!state.people.length) { box.innerHTML = '<div class="empty">No one added yet.</div>'; return; }
+  box.innerHTML = state.people.map(p => `
+    <div class="person-row">
+      <input class="name" value="${escapeHtml(p.name)}" oninput="rename('${p.id}', this.value)">
+      <button class="icon-btn" title="Remove" onclick="removePerson('${p.id}')">×</button>
+    </div>`).join('');
+}
+
+function renderShares() {
+  const box = $('shares');
+  if (!state.people.length) { box.innerHTML = '<div class="empty">Add people first.</div>'; return; }
+  box.innerHTML = state.people.map(p => `
+    <div class="person-row">
+      <span class="name">${escapeHtml(p.name)}</span>
+      <input class="amt" type="number" inputmode="decimal" placeholder="0.00"
+             value="${p.share || ''}" oninput="setShare('${p.id}', this.value)">
+    </div>`).join('');
+}
+
+function renderPayer() {
+  const sel = $('payer');
+  sel.innerHTML = '<option value="">— nobody yet —</option>' +
+    state.people.map(p => `<option value="${p.id}" ${state.payer===p.id?'selected':''}>${escapeHtml(p.name)}</option>`).join('');
+}
+
+function rename(id, v) { const p = state.people.find(x=>x.id===id); if (p) { p.name = v; renderShares(); renderPayer(); save(); } }
+function setShare(id, v) { const p = state.people.find(x=>x.id===id); if (p) { p.share = parseFloat(v) || 0; calc(); save(); } }
+
+function baseFor(p, subtotal) {
+  if (state.mode === 'even') return state.people.length ? subtotal / state.people.length : 0;
+  return p.share || 0;
+}
+
+function calc() {
+  state.payer = $('payer').value;
+  const mode = state.mode;
+  const n = state.people.length;
+
+  // subtotal (before any charges)
+  let subtotal;
+  if (mode === 'even') subtotal = parseFloat($('evenTotal').value) || 0;
+  else subtotal = state.people.reduce((s,p) => s + (p.share||0), 0);
+
+  // service charge — split EVENLY between everyone
+  const scVal = parseFloat($('scVal').value) || 0;
+  const serviceCharge = $('scType').value === 'pct' ? subtotal * scVal/100 : scVal;
+  const scPerPerson = n ? serviceCharge / n : 0;
+
+  // service tax — charged on (share + even service charge share), so it never
+  // stacks on itself and the per-person totals sum exactly to the grand total
+  const taxVal = parseFloat($('taxVal').value) || 0;
+  const taxRate = $('taxType').value === 'pct' ? taxVal/100 : 0;
+  const taxFlat = $('taxType').value === 'abs' ? taxVal : 0;
+  const taxableTotal = subtotal + serviceCharge;
+  const serviceTax = taxRate > 0 ? taxableTotal * taxRate : taxFlat;
+
+  const grand = subtotal + serviceCharge + serviceTax;
+
+  const res = $('results');
+  if (!n || subtotal <= 0) {
+    res.innerHTML = '<div class="empty">Add people and amounts to see the split.</div>';
+    $('totals').innerHTML = '';
+    save();
+    return;
+  }
+
+  res.innerHTML = state.people.map(p => {
+    const base = baseFor(p, subtotal);
+    const taxable = base + scPerPerson;
+    // proportional flat tax fallback, else percentage tax on this person's taxable amount
+    const personTax = taxRate > 0 ? taxable * taxRate
+                                  : (taxableTotal > 0 ? taxFlat * taxable / taxableTotal : 0);
+    const owesTotal = base + scPerPerson + personTax;
+    const isPayer = state.payer === p.id;
+
+    let sub = `${money(base)} share`;
+    if (serviceCharge > 0) sub += ` + ${money(scPerPerson)} svc`;
+    if (serviceTax > 0) sub += ` + ${money(personTax)} tax`;
+
+    let valHtml;
+    if (isPayer) {
+      const paidBack = grand - owesTotal;
+      valHtml = `<span class="val paid">gets ${money(paidBack)}</span>`;
+      sub += ' · paid the bill';
+    } else {
+      valHtml = `<span class="val owes">${money(owesTotal)}</span>`;
+    }
+    return `<div class="result-row">
+      <div><div class="who">${escapeHtml(p.name)}</div><div class="sub">${sub}</div></div>
+      ${valHtml}
+    </div>`;
+  }).join('');
+
+  const payerName = state.payer ? (state.people.find(p=>p.id===state.payer)||{}).name : null;
+  $('totals').innerHTML = `
+    <div class="line"><span>Subtotal</span><span>${money(subtotal)}</span></div>
+    <div class="line"><span>Service charge${serviceCharge>0?' (split evenly)':''}</span><span>${money(serviceCharge)}</span></div>
+    <div class="line"><span>Service tax</span><span>${money(serviceTax)}</span></div>
+    <div class="line grand"><span>Total${payerName ? ' — '+escapeHtml(payerName)+' paid' : ''}</span><span>${money(grand)}</span></div>`;
+  save();
+}
+
+function render() {
+  renderPeople();
+  renderShares();
+  renderPayer();
+  document.querySelectorAll('#modeSeg button').forEach(b => b.classList.toggle('active', b.dataset.mode === state.mode));
+  $('evenBox').style.display = state.mode === 'even' ? 'block' : 'none';
+  $('customBox').style.display = state.mode === 'custom' ? 'block' : 'none';
+  calc();
+}
+
+function resetAll() {
+  if (!confirm('Clear everyone and start over?')) return;
+  state = { people: [], mode: state.mode, payer: '' };
+  $('evenTotal').value = '';
+  $('scVal').value = '10';
+  $('taxVal').value = '6';
+  render();
+}
+
+function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+$('newName').addEventListener('keydown', e => { if (e.key === 'Enter') addPerson(); });
+
+// seed a couple of people on first run for a friendlier start
+if (!state.people.length) { state.people = [{id:uid(),name:'Me',share:0},{id:uid(),name:'Friend',share:0}]; }
+render();
+</script>
+</body>
+</html>
